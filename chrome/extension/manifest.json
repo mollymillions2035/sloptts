@@ -1,0 +1,19 @@
+{
+  "manifest_version": 3,
+  "name": "Kokoro TTS (sloptts)",
+  "version": "1.0.0",
+  "description": "Kokoro voices for Chrome's Reading mode and the Web Speech API, from the local Kokoro server",
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAr99MupdKbHkWMQZY+CZxraHKcqSOaFDeDQwtRWhgKkboh0sYhkW62JermPLHKLolUtrl9iejpYRQ/jtXpPSHRRpS+PURzijOd0E0mFxmf9oPFcOSMMNLWbLX36F5YHXKosdRLQ+KZxSxoGojd7s7YLnh0xeNE7IvZpygwDpVR4ihcTO9CyyQPoleH4CIcuq2fiFXc6S/RwCxzfUS1emWKuGDWBpvgDUWlJHgqfEWZZsrjHfLDdi9ySaIxoih5BB7E2Q4E+iwem0dwU/CbNTXVsB0qRSElTyYLx/SzygMqSQYL0+6aXGwada+Mfnk9E2Nfwsb2r8Fo4GPGraU6J3o6QIDAQAB",
+  "permissions": ["ttsEngine", "nativeMessaging"],
+  "background": {"service_worker": "background.js"},
+  "tts_engine": {
+    "voices": [
+      {"voice_name": "Kokoro Heart (not Google)", "lang": "en-US", "event_types": ["start", "end", "word", "error"]},
+      {"voice_name": "Kokoro Bella (not Google)", "lang": "en-US", "event_types": ["start", "end", "word", "error"]},
+      {"voice_name": "Kokoro Michael (not Google)", "lang": "en-US", "event_types": ["start", "end", "word", "error"]},
+      {"voice_name": "Kokoro Fenrir (not Google)", "lang": "en-US", "event_types": ["start", "end", "word", "error"]},
+      {"voice_name": "Kokoro Emma (not Google)", "lang": "en-GB", "event_types": ["start", "end", "word", "error"]},
+      {"voice_name": "Kokoro George (not Google)", "lang": "en-GB", "event_types": ["start", "end", "word", "error"]}
+    ]
+  }
+}

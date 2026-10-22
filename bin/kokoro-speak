@@ -24,7 +24,9 @@ import sys
 RUNTIME_DIR = os.environ.get("XDG_RUNTIME_DIR", "/tmp")
 SOCKET = os.environ.get("KOKORO_SOCKET") or os.path.join(RUNTIME_DIR, "kokoro-tts", "kokoro-tts.sock")
 PIDFILE = os.path.join(RUNTIME_DIR, "kokoro-speak.pid")
-PLAYER = ["pw-play", "--raw", "--rate", "24000", "--channels", "1", "--format", "f32", "-"]
+# The node name lets the Omarchy bar button (omarchy/bar-widget) see that we're speaking
+PLAYER = ["pw-play", "--raw", "--rate", "24000", "--channels", "1", "--format", "f32",
+          "--properties", '{ node.name = "kokoro-speak" media.name = "Kokoro TTS" }', "-"]
 
 
 def notify(message):

@@ -1,28 +1,50 @@
 # slopvoice
 
-Local Kokoro TTS: a server (`server/`), the `kokoro-speak` client (`bin/`), a Speech
-Dispatcher module (`speechd/sd_kokoro`), an Omarchy installer (`omarchy/install.sh`), and
-the record of the original Fedora Silverblue 44 setup (`fedora/`). See README.md for the
+Local Kokoro TTS: a server (`server/`), the `kokoro-speak` client (`bin/`), a Chrome
+extension with its native messaging host (`chrome/`), a Speech Dispatcher module
+(`speechd/sd_kokoro`), an Omarchy installer (`omarchy/install.sh`), and the record of the
+original Fedora Silverblue 44 setup (`fedora/`). See README.md for the
 layout, where each file is installed, and lessons learned.
 
 The files here are **copies**. The live versions are at the paths listed in README.md.
 Don't change the running system unless asked; edit the live file and copy it back
 here (or the reverse) when asked.
 
-- **Omarchy:** `omarchy/install.sh` installs everything. The server runs natively (no
-  Docker) from a uv venv in `~/.local/share/kokoro-tts/.venv`: onnxruntime-gpu with the
+- **Omarchy:** `omarchy/install.sh` installs everything, including the `sloptts.speak`
+  bar button (`omarchy/bar-widget/`, live in `~/.config/omarchy/plugins/sloptts.speak/`).
+  The server runs natively (no Docker) from a uv venv in `~/.local/share/kokoro-tts/.venv`: onnxruntime-gpu with the
   CUDA pip wheels when there's an NVIDIA GPU, else the CPU onnxruntime (`--cpu` forces
   it). Keys go in a marked block in `~/.config/hypr/bindings.lua`.
+- **Chrome:** the extension (`chrome/extension/`, live in
+  `~/.local/share/kokoro-tts/chrome-extension/`) is loaded unpacked by hand; the host
+  (`chrome/kokoro-chrome-host`, live next to it) is registered as `sloptts.kokoro` in
+  `~/.config/{google-chrome,chromium}/NativeMessagingHosts/`. Keep the manifest's `key`
+  (it fixes the extension ID the host manifest allows). Test in a throwaway Chromium or
+  Chrome profile, never the user's: see README's lessons for loading the extension there.
 - **Fedora:** use `/usr/bin/python3` on the host, since `python3` on PATH is Homebrew's
   and lacks `gi` and `speechd`. The server runs in the `kokoro` distrobox (Python 3.12
   venv in `~/kokoro/.venv`).
 - The socket is `$XDG_RUNTIME_DIR/kokoro-tts/kokoro-tts.sock` (it was
   `$XDG_RUNTIME_DIR/kokoro-tts.sock` on Fedora before the Omarchy port). Keep
-  `server.py`, `sd_kokoro` and `kokoro-speak` in step.
+  `server.py`, `sd_kokoro`, `kokoro-speak` and `kokoro-chrome-host` in step.
 - Test the installer with stubbed commands and a fake `HOME`; never run it against the
   real `HOME` of whatever machine you're on.
 
 ## TODO
+
+The Speech Dispatcher items below (stray words, second site, sentence gaps) are about
+the `--with-speechd` route; the Chrome extension doesn't go through Speech Dispatcher.
+
+- [ ] **Word highlighting in Reading mode.** The extension reports the whole utterance as
+  one `word` (needed so Reading mode's resume doesn't hang; see README), so Reading mode
+  can't follow word by word, and resuming after a pause replays the sentence.
+  kokoro-onnx's `create_timed()` (v1.1 export) gives per-phoneme timings; mapping them to words of the original text (before
+  `clean()` rewrites it) would let the server report them and the host send real `word`
+  events.
+- [ ] **Reading mode itself is untested by script.** Web Speech API tests in headless
+  Chromium and Chrome pass (start/end, pause/resume, cancel, voice by language,
+  Reading mode's cancel-then-speak pattern). Reading mode worked when checked by hand in
+  Chrome 156 (2026-10-22), including play after pausing and previewing a voice.
 
 - [ ] **Stray words spoken aloud: "espeak" and "spd-say".** Sometimes the TTS speaks
   these words by themselves. Not investigated yet. Ideas:

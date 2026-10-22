@@ -7,8 +7,10 @@ loaded and streams audio over a Unix socket. Clients send it text:
 
 - **`kokoro-speak`**: speak the highlighted text, the clipboard, an argument or stdin. On
   Omarchy it is bound to a key (press again to stop).
-- **`sd_kokoro`**: a Speech Dispatcher module, for Chrome's Reading mode "Read aloud",
-  `spd-say` and Orca.
+- **Chrome extension** (`chrome/`): Kokoro voices for Chrome and Chromium, for Reading
+  mode's "Read aloud" and any page using the Web Speech API.
+- **`sd_kokoro`**: a Speech Dispatcher module, for `spd-say`, Orca and (the older route)
+  Chrome.
 
 It started on Fedora Silverblue (see [Fedora](#fedora-silverblue-the-original-setup)) and
 now has an installer for [Omarchy](https://omarchy.org/) (Arch + Hyprland).
@@ -19,11 +21,14 @@ now has an installer for [Omarchy](https://omarchy.org/) (Arch + Hyprland).
 |---|---|
 | `server/server.py` | The TTS server. Protocol: one JSON line `{"text","voice","speed"}` in, raw 24 kHz mono float32 PCM out until the server closes the connection. A client disconnecting stops synthesis. Normalizes dots that espeak-ng would read as sentence ends (`5.5.`, `1.2.3`, `example.com`, `e.g.`), and turns rendered math into words: math letters (`𝜋`, `𝑟`, `ℝ`), powers, fractions, derivatives, limits, integral and sum bounds, absolute values, factorials, primes, accents, and the symbols espeak-ng skips or misreads. |
 | `server/say.py` | Standalone script to compare voices (`say.py VOICE "text" [--speed] [--out f.wav] [--list]`). |
-| `bin/kokoro-speak` | Client for keys and scripts. Sends the whole text in one request into one `pw-play`, so there's no start-up gap between sentences. Only one instance speaks at a time. |
+| `bin/kokoro-speak` | Client for keys, the bar button and scripts. Sends the whole text in one request into one `pw-play`, so there's no start-up gap between sentences. Only one instance speaks at a time. Its PipeWire stream is named `kokoro-speak` ("Kokoro TTS" in mixers). |
+| `chrome/extension/` | Chrome/Chromium extension (Manifest V3) registering six Kokoro voices (Heart, Bella, Michael, Fenrir: en-US; Emma, George: en-GB), named like `Kokoro Heart (not Google)`, as a `ttsEngine`. Its fixed `key` gives it the ID `imfdenmcpjfjjcbkhpbgldooiijflami`. |
+| `chrome/kokoro-chrome-host` | The extension's native messaging host (Python, standard library only): one server request and one `pw-play` per utterance (stream `kokoro-chrome`); stop, pause and resume. Touch `~/.config/kokoro-tts/chrome-debug` to log the conversation with Chrome to `$XDG_RUNTIME_DIR/kokoro-chrome-host.log`. |
 | `speechd/sd_kokoro` | Speech Dispatcher output module (Python, standard library only). Pause, resume and stop cut off immediately, and index marks are reported as sentences finish. |
 | `omarchy/install.sh` | Omarchy installer (details below). |
 | `omarchy/kokoro-tts.service` | The `kokoro-tts` user unit (runs `server.py` from the venv). |
 | `omarchy/bindings.lua` | Template for the Hyprland keys block. |
+| `omarchy/bar-widget/` | The `sloptts.speak` Omarchy shell plugin: a bar button that runs `kokoro-speak`, and turns into a stop button while a `kokoro-speak` stream is playing. |
 | `fedora/` | The original Fedora Silverblue setup: distrobox unit, `speechd.conf`, `sd_generic` config, Chrome launcher, Orca settings, libspiel RPM spec, backups. |
 
 Paths and environment used by all parts:
@@ -45,6 +50,18 @@ git clone https://github.com/girlpocalypse/sloptts && cd sloptts
 
 Then select some text and press **Alt + F9**. Press it again to stop.
 **Super + Alt + F9** reads the clipboard.
+
+With the mouse only: select text, then click the **Speak** button in the bar (the
+speaking-person icon, left of the volume icon). Right-click it to read the clipboard
+instead, for example after right-click → Copy. While anything is being read, by key or by
+click, the button turns into a red stop square; click it to stop.
+
+**Chrome / Chromium Reading mode:** once per browser profile, open `chrome://extensions`,
+turn on **Developer mode**, click **Load unpacked** and pick
+`~/.local/share/kokoro-tts/chrome-extension`. Then open Reading mode (right-click a page →
+**Open in reading mode**), pick a **Kokoro … (not Google)** voice in its voice menu and press
+play. After updating the extension's files, click its reload button in `chrome://extensions`.
+Pages that use `speechSynthesis` get the Kokoro voices too.
 
 ### What the installer does
 
@@ -74,7 +91,17 @@ Then select some text and press **Alt + F9**. Press it again to stop.
 5. **Adds the keys** as a marked block (`-- >>> sloptts` … `-- <<< sloptts`) at the end of
    `~/.config/hypr/bindings.lua` (after a timestamped backup), then runs
    `hyprctl reload` and `hyprctl configerrors`.
-6. **With `--with-speechd`:**
+6. **Adds the bar button** (skip with `--no-bar`): copies `omarchy/bar-widget/` to
+   `~/.config/omarchy/plugins/sloptts.speak/` and enables it left of the volume icon
+   (`omarchy plugin enable sloptts.speak --before omarchy.audio`). On a re-run it updates
+   the files but leaves the button wherever it was dragged to.
+7. **Sets up the Chrome extension** (skip with `--no-chrome`): copies `chrome/extension/`
+   to `~/.local/share/kokoro-tts/chrome-extension/` and the host next to it, and writes the
+   native messaging manifest `sloptts.kokoro.json` into `NativeMessagingHosts/` of
+   `~/.config/google-chrome` and `~/.config/chromium` (whichever exist). Loading the
+   extension is up to you (see above): Chrome doesn't let scripts install unpacked
+   extensions.
+8. **With `--with-speechd`:**
    - Installs `speech-dispatcher` and `sd_kokoro`.
    - Writes `~/.config/speech-dispatcher/speechd.conf` with kokoro as the only module,
      keeping the original as `speechd.conf.sloptts-orig`.
@@ -105,9 +132,10 @@ isn't running).
 ## How it fits together
 
 ```
-Hyprland key ─▶ kokoro-speak ───────────────────────┐
+Hyprland key / bar ─▶ kokoro-speak ─────────────────┐
+Chrome ─▶ extension ─▶ kokoro-chrome-host ──────────┤
                                                     ├─ Unix socket ─▶ server.py
-Chrome / spd-say ─▶ speech-dispatcher ─▶ sd_kokoro ─┘
+spd-say / Orca ─▶ speech-dispatcher ─▶ sd_kokoro ───┘
                                                                       (uv venv, CUDA or CPU)
                                                                       │
       each client plays the PCM it gets back with pw-play ◀───────────┘
@@ -119,6 +147,16 @@ and another writes it to a single `pw-play` and reports each mark once the sente
 before it has played. Pause or stop kills `pw-play` and closes the socket, and the
 server abandons the rest of the text. `kokoro-speak` needs no marks, so it sends
 everything at once.
+
+The Chrome extension is a `ttsEngine`: Chrome gives it one utterance at a time (Reading
+mode sends roughly a sentence each) and waits for its "end" event before the next one. It
+passes each one to `kokoro-chrome-host` over native messaging, which Chrome starts on
+first use and keeps running while the port is open (the extension lets it go after five
+idle minutes). The host makes one server request per utterance and plays it with one
+`pw-play`. Pause kills `pw-play` but keeps the audio; resume plays it again from the
+last gap in the speech before the point where it stopped, so it doesn't restart mid-word.
+Reading mode doesn't use that resume: since the extension reports a word boundary, it
+re-speaks the current sentence instead (see Lessons learned).
 
 ## Fedora Silverblue (the original setup)
 
@@ -177,6 +215,37 @@ stdin.
 
 ## Lessons learned
 
+- **A Chrome extension beats Speech Dispatcher for Chrome.** It needs no Chrome flag
+  and no `speech-dispatcher` daemon, and avoids that path's problems (see CLAUDE.md: gaps
+  between sentences, no audio on a second site until Chrome restarts, stray "espeak"
+  words). The catch is loading it unpacked once per profile.
+- **Reading mode lists only one non-Google voice per language, as "System voice".**
+  Its `getFilteredVoiceList` drops remote voices when any local one exists, keeps every
+  voice with "Google" in its name, and of the rest keeps just the default (or first)
+  voice per `lang`, shown as "System voice". Chrome's built-in engine registers local
+  "Chrome OS US English 1–8" / "Chrome OS UK English …" voices once natural voices are
+  downloaded, and as a component it's listed first, so Kokoro never got the slot. Hence
+  "(not Google)" in the voice names: it puts them on the Google side of that filter.
+  (Seen in Chrome 156 and Chromium 155; it has been like this for many releases.)
+- **Reading mode resumes differently without word boundaries.** After a pause, if the
+  voice has sent any `word` boundary it re-speaks from the last one; if not, it calls
+  `speechSynthesis.resume()`. That hangs (play spins forever, until you skip a sentence)
+  when the paused utterance was cancelled in between, for example by previewing or
+  choosing a voice. The extension therefore reports the whole utterance as one `word`
+  right after `start`, so resuming replays the current sentence.
+- **`ttsEngine` voices can't declare `pause` or `resume` events.** Chrome rejects the
+  manifest ("Invalid value for 'tts_engine.voices[*].event_types'"); only `start`, `end`,
+  `error` and the like. Chrome tracks pause itself and calls `onPause`/`onResume`.
+- **Native messaging hosts are per user data dir on Linux**
+  (`<user data dir>/NativeMessagingHosts/`), so a throwaway `--user-data-dir` needs its own
+  copy of the manifest.
+- **Chromium 155 ignores `--load-extension`.** For tests, start it with
+  `--remote-debugging-pipe --enable-unsafe-extension-debugging` and call the CDP method
+  `Extensions.loadUnpacked`. `speechSynthesis.speak()` from CDP also needs
+  `userGesture: true`, or it fails with `not-allowed`. Branded Chrome 156 works the same
+  way. Reusing a test profile can keep the extension's old service worker code after its
+  files change, so use a fresh `--user-data-dir`. `speechSynthesis.getVoices()` is empty
+  until `voiceschanged` fires.
 - **Chrome on Linux ignores system TTS without `--enable-speech-dispatcher`.** Without it,
   Reading mode's "system" voice is Chrome's built-in `WasmTtsEngine`.
 - **Chrome picks its own voice every time.** Speech Dispatcher's `DefaultModule` is

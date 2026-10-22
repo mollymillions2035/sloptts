@@ -1,13 +1,18 @@
 #!/usr/bin/env bash
 # Install the Kokoro TTS setup on Omarchy: the server as a user service, the
-# kokoro-speak client, and Hyprland keys to speak the selection or clipboard.
+# kokoro-speak client, Hyprland keys to speak the selection or clipboard, a bar button
+# that does the same with the mouse, and Kokoro voices for Chrome and Chromium (Reading
+# mode's Read aloud) through an extension, which you load once by hand.
 # The server runs from a uv venv, on an NVIDIA GPU with CUDA when there is one, otherwise
 # on the CPU. Safe to re-run. Everything is per-user; only package installs need root.
 #
 #   ./omarchy/install.sh                  install
 #   ./omarchy/install.sh --cpu            use the CPU even if there's an NVIDIA GPU
-#   ./omarchy/install.sh --with-speechd   also: Speech Dispatcher module + Chrome flag
+#   ./omarchy/install.sh --with-speechd   also: Speech Dispatcher module + Chrome flag (the
+#                                         older way into Chrome; the extension replaces it)
 #   ./omarchy/install.sh --no-bindings    skip the Hyprland keys
+#   ./omarchy/install.sh --no-bar         skip the bar button
+#   ./omarchy/install.sh --no-chrome      skip the Chrome extension and its host
 #   ./omarchy/install.sh --uninstall      remove it again (keeps the model files)
 set -euo pipefail
 
@@ -19,6 +24,13 @@ MODULE_DIR=$HOME/.local/libexec/speech-dispatcher-modules
 SPEECHD_DIR=$HOME/.config/speech-dispatcher
 CHROME_FLAGS=$HOME/.config/chrome-flags.conf
 BINDINGS=$HOME/.config/hypr/bindings.lua
+PLUGIN_ID=sloptts.speak
+PLUGIN_DIR=$HOME/.config/omarchy/plugins/$PLUGIN_ID
+# The extension ID follows from the "key" in chrome/extension/manifest.json
+EXTENSION_DIR=$DATA/chrome-extension
+EXTENSION_ID=imfdenmcpjfjjcbkhpbgldooiijflami
+NATIVE_HOST=sloptts.kokoro
+BROWSER_DIRS=("$HOME/.config/google-chrome" "$HOME/.config/chromium")
 
 # Python is capped by kokoro-onnx (<3.14). Changing a version here upgrades the venv
 # on re-run.
@@ -44,6 +56,8 @@ KEY_CHECKS=("8 F9" "72 F9")
 USE_GPU=1
 WITH_SPEECHD=0
 BINDINGS_WANTED=1
+BAR_WANTED=1
+CHROME_WANTED=1
 ACTION=install
 
 say() { printf '\033[1m==>\033[0m %s\n' "$*"; }
@@ -58,6 +72,8 @@ while (($#)); do
     --cpu) USE_GPU=0 ;;
     --with-speechd) WITH_SPEECHD=1 ;;
     --no-bindings) BINDINGS_WANTED=0 ;;
+    --no-bar) BAR_WANTED=0 ;;
+    --no-chrome) CHROME_WANTED=0 ;;
     --uninstall) ACTION=uninstall ;;
     -h | --help) usage; exit 0 ;;
     *) die "unknown option: $1 (see --help)" ;;
@@ -216,6 +232,76 @@ install_bindings() {
   reload_hyprland
 }
 
+# --- bar button ---------------------------------------------------------------
+
+shell_running() { have omarchy-shell && omarchy-shell shell listPlugins >/dev/null 2>&1; }
+
+plugin_enabled() {
+  omarchy-shell shell listPlugins | jq -e --arg id "$PLUGIN_ID" 'any(.[]; .id == $id and .enabled)' >/dev/null
+}
+
+# A plugin in ~/.config/omarchy/plugins; the shell reloads it when the files change
+install_bar_widget() {
+  install -Dm644 -t "$PLUGIN_DIR" "$REPO/omarchy/bar-widget/manifest.json" "$REPO/omarchy/bar-widget/SpeakWidget.qml"
+  if ! shell_running; then
+    warn "omarchy-shell isn't running; add the bar button later with: omarchy plugin enable $PLUGIN_ID"
+    return 0
+  fi
+  need_packages jq
+  omarchy-shell shell rescanPlugins >/dev/null
+  # On a re-run, leave the button wherever it was dragged to
+  plugin_enabled && return 0
+  say "Adding the Speak button to the bar"
+  omarchy plugin enable "$PLUGIN_ID" --before omarchy.audio >/dev/null 2>&1 ||
+    omarchy plugin enable "$PLUGIN_ID" >/dev/null
+}
+
+uninstall_bar_widget() {
+  [[ -d $PLUGIN_DIR ]] || return 0
+  say "Removing the bar button"
+  shell_running && omarchy-shell shell setPluginEnabled "$PLUGIN_ID" false >/dev/null
+  rm -rf "$PLUGIN_DIR"
+  shell_running && omarchy-shell shell rescanPlugins >/dev/null
+  return 0
+}
+
+# --- Chrome and Chromium extension -------------------------------------------
+
+# The extension is a TTS engine; its native messaging host talks to the server and
+# plays the audio. Chrome won't let a script install an unpacked extension, so loading
+# it is left to the user. Native hosts are found in <user data dir>/NativeMessagingHosts.
+install_chrome() {
+  install -Dm755 "$REPO/chrome/kokoro-chrome-host" "$DATA/kokoro-chrome-host"
+  install -Dm644 -t "$EXTENSION_DIR" "$REPO/chrome/extension/manifest.json" "$REPO/chrome/extension/background.js"
+  local dir found=0
+  for dir in "${BROWSER_DIRS[@]}"; do
+    [[ -d $dir ]] || continue
+    found=1
+    mkdir -p "$dir/NativeMessagingHosts"
+    jq -n --arg name "$NATIVE_HOST" --arg path "$DATA/kokoro-chrome-host" \
+      --arg origin "chrome-extension://$EXTENSION_ID/" \
+      '{name: $name, description: "Kokoro TTS for the sloptts Chrome extension", path: $path,
+        type: "stdio", allowed_origins: [$origin]}' >"$dir/NativeMessagingHosts/$NATIVE_HOST.json"
+  done
+  if ((!found)); then
+    warn "neither Chrome nor Chromium has been started yet; re-run the installer after starting one"
+    return 0
+  fi
+  say "For Kokoro voices in Chrome or Chromium (once per profile): open chrome://extensions,"
+  echo "    turn on Developer mode, click Load unpacked and pick $EXTENSION_DIR"
+  echo "    Then choose a Kokoro voice in Reading mode's voice menu."
+}
+
+uninstall_chrome() {
+  local dir
+  for dir in "${BROWSER_DIRS[@]}"; do
+    rm -f "$dir/NativeMessagingHosts/$NATIVE_HOST.json"
+  done
+  [[ -d $EXTENSION_DIR ]] || return 0
+  rm -rf "$EXTENSION_DIR" "$DATA/kokoro-chrome-host"
+  say "Also remove \"Kokoro TTS (sloptts)\" in chrome://extensions"
+}
+
 # --- Speech Dispatcher and Chrome (optional) ----------------------------------
 
 install_speechd() {
@@ -259,6 +345,8 @@ uninstall() {
   systemctl --user daemon-reload
 
   rm -f "$BIN/kokoro-speak"
+  uninstall_bar_widget
+  uninstall_chrome
   if [[ -f $BINDINGS ]] && grep -q '^-- >>> sloptts' "$BINDINGS"; then
     backup "$BINDINGS"
     remove_binding_block
@@ -293,10 +381,17 @@ have omarchy || warn "the omarchy command wasn't found; this installer is writte
 install_server
 install_client
 ((BINDINGS_WANTED)) && install_bindings
+((BAR_WANTED)) && install_bar_widget
+if ((CHROME_WANTED)); then
+  need_packages jq
+  install_chrome
+fi
 ((WITH_SPEECHD)) && install_speechd
 
 say "Installed. The server takes a few seconds to load the model; watch it with:"
 echo "    journalctl --user -u kokoro-tts -f"
 echo "Try: $BIN/kokoro-speak \"Hello from Kokoro.\""
 ((BINDINGS_WANTED)) && echo "Select text and press $KEY_SELECTION (press again to stop); $KEY_CLIPBOARD reads the clipboard."
+((BAR_WANTED)) && echo "Or click the Speak button in the bar (right-click reads the clipboard)."
+((CHROME_WANTED)) && echo "Chrome: load the extension as described above, then use Reading mode's Read aloud."
 exit 0

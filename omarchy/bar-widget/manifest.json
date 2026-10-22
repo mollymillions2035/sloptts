@@ -1,0 +1,22 @@
+{
+  "schemaVersion": 1,
+  "id": "sloptts.speak",
+  "name": "Speak",
+  "version": "1.0.0",
+  "author": "sloptts",
+  "license": "MIT",
+  "description": "Bar button for Kokoro TTS: speak the selection or the clipboard, click again to stop",
+  "kinds": [
+    "bar-widget"
+  ],
+  "entryPoints": {
+    "barWidget": "SpeakWidget.qml"
+  },
+  "barWidget": {
+    "displayName": "Speak",
+    "description": "Left-click speaks the selection, right-click the clipboard; click again to stop",
+    "category": "Audio",
+    "allowMultiple": false,
+    "defaultSection": "right"
+  }
+}

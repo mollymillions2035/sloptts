@@ -1,0 +1,267 @@
+#!/usr/bin/python3
+"""Native messaging host for the Kokoro TTS Chrome extension (chrome/extension).
+
+Chrome starts it when the extension first speaks and talks to it over stdin/stdout
+(each message is a 4-byte length in native byte order, then JSON). The extension sends
+    {"type": "speak", "id": 1, "text": "...", "voice": "af_heart", "speed": 1.0, "volume": 1.0}
+    {"type": "stop"}, {"type": "pause"}, {"type": "resume"}
+and gets back {"id": 1, "event": "start" | "end" | "error", "message": "..."}. (Chrome
+doesn't take pause or resume events from an engine; it tracks those itself.)
+
+Each utterance goes to the Kokoro server in one request and plays through one pw-play,
+like kokoro-speak. Pause kills pw-play (stopping it with SIGSTOP isn't reliable with
+PipeWire) but keeps the audio, and resume plays it again from the last gap in the speech
+before the point where it stopped, so it doesn't restart mid-word.
+
+Debugging: while ~/.config/kokoro-tts/chrome-debug exists, the host logs every message
+(with the text cut short) and what pw-play does to $XDG_RUNTIME_DIR/kokoro-chrome-host.log.
+The extension also sends a "log" message for each call Chrome makes to it.
+"""
+import array
+import json
+import os
+import socket
+import struct
+import subprocess
+import sys
+import threading
+import time
+
+RUNTIME_DIR = os.environ.get("XDG_RUNTIME_DIR", "/tmp")
+SOCKET = os.environ.get("KOKORO_SOCKET") or os.path.join(RUNTIME_DIR, "kokoro-tts", "kokoro-tts.sock")
+RATE = 24000  # samples per second, mono float32
+SAMPLE = 4  # bytes per sample
+PLAYER = ["pw-play", "--raw", "--rate", str(RATE), "--channels", "1", "--format", "f32",
+          "--properties", '{ node.name = "kokoro-chrome" media.name = "Kokoro TTS (Chrome)" }']
+# Finding where to resume: a run of samples at least QUIET_RUN long below QUIET, at most
+# LOOK_BACK before the point where playback stopped
+QUIET = 0.01
+QUIET_RUN = RATE * 40 // 1000
+LOOK_BACK = RATE * 3
+LEAD_IN = RATE * 30 // 1000  # silence kept before the resumed word
+
+DEBUG_FLAG = os.path.expanduser("~/.config/kokoro-tts/chrome-debug")
+DEBUG_LOG = os.path.join(RUNTIME_DIR, "kokoro-chrome-host.log")
+
+send_lock = threading.Lock()
+debug_file = open(DEBUG_LOG, "a", buffering=1) if os.path.exists(DEBUG_FLAG) else None
+
+
+def debug(*parts):
+    if debug_file:
+        now = time.time()
+        debug_file.write(f"{time.strftime('%H:%M:%S', time.localtime(now))}.{int(now * 1000) % 1000:03d} "
+                         f"{' '.join(map(str, parts))}\n")
+
+
+def shorten(message):
+    if "text" not in message:
+        return message
+    text = message["text"]
+    return {**message, "text": f"{text[:30]!r}... ({len(text)} chars)" if len(text) > 30 else repr(text)}
+
+
+def send(message):
+    debug("->", message)
+    data = json.dumps(message).encode()
+    with send_lock:
+        sys.stdout.buffer.write(struct.pack("=I", len(data)) + data)
+        sys.stdout.buffer.flush()
+
+
+def receive():
+    header = sys.stdin.buffer.read(4)
+    if len(header) < 4:
+        return None
+    (length,) = struct.unpack("=I", header)
+    return json.loads(sys.stdin.buffer.read(length))
+
+
+def resume_point(audio, position):
+    """Byte offset to resume from: just before the last word that starts before position."""
+    low = max(0, position // SAMPLE - LOOK_BACK)
+    samples = array.array("f")
+    samples.frombytes(bytes(audio[low * SAMPLE:position - position % SAMPLE]))
+    run = 0
+    for i in range(len(samples) - 1, -1, -1):
+        if abs(samples[i]) < QUIET:
+            run += 1
+        elif run >= QUIET_RUN:
+            return (low + i + 1 + max(run - LEAD_IN, 0)) * SAMPLE
+        else:
+            run = 0
+    return low * SAMPLE
+
+
+class Stopped(Exception):
+    pass
+
+
+class Utterance:
+    def __init__(self, message):
+        self.id = message.get("id")
+        self.request = {"text": message.get("text", ""), "voice": message.get("voice"),
+                        "speed": message.get("speed", 1.0)}
+        self.volume = min(max(float(message.get("volume", 1.0)), 0.0), 1.0)
+        self.audio = bytearray()
+        self.fetched = False  # the server has sent everything
+        self.state = "playing"  # or "paused", "stopped"
+        self.started = False  # "start" was sent
+        self.resume_at = 0
+        self.playing_since = None  # (time, byte offset) of the current pw-play's first write
+        self.sock = self.player = None
+        self.cond = threading.Condition()
+        threading.Thread(target=self.fetch, daemon=True).start()
+        threading.Thread(target=self.play, daemon=True).start()
+
+    def event(self, name, **extra):
+        send({"id": self.id, "event": name, **extra})
+
+    def fetch(self):
+        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        try:
+            with self.cond:
+                if self.state == "stopped":
+                    return
+                self.sock = sock
+            sock.connect(SOCKET)
+            if self.state == "stopped":
+                return
+            sock.sendall(json.dumps(self.request).encode() + b"\n")
+            while chunk := sock.recv(65536):
+                with self.cond:
+                    self.audio += chunk
+                    self.cond.notify_all()
+        except OSError as error:
+            with self.cond:
+                if self.state == "stopped":
+                    return
+                self.state = "stopped"
+            self.event("error", message=f"Kokoro server not reachable ({error}). "
+                                        "Check: systemctl --user status kokoro-tts")
+        finally:
+            sock.close()
+            with self.cond:
+                self.fetched = True
+                self.cond.notify_all()
+
+    def play(self):
+        while True:
+            with self.cond:
+                self.cond.wait_for(lambda: self.state != "paused")
+                if self.state == "stopped":
+                    return
+                start = self.resume_at
+            try:
+                finished = self.play_from(start)
+            except Stopped:
+                continue  # paused or stopped
+            if not finished:
+                self.event("error", message="pw-play failed")
+            else:
+                if not self.started:  # nothing to say (only punctuation, say)
+                    self.event("start")
+                self.event("end")
+            return
+
+    def play_from(self, offset):
+        """Play the audio from offset until it's all played (True) or pw-play fails (False)."""
+        command = PLAYER + (["--volume", f"{self.volume:.2f}"] if self.volume < 1 else []) + ["-"]
+        player = subprocess.Popen(command, stdin=subprocess.PIPE, stderr=subprocess.DEVNULL)
+        debug(f"   {self.id}: pw-play {player.pid} from byte {offset}")
+        try:
+            with self.cond:
+                self.player = player
+                self.playing_since = None
+            while True:
+                with self.cond:
+                    self.cond.wait_for(lambda: len(self.audio) - offset >= SAMPLE or self.fetched
+                                       or self.state != "playing")
+                    if self.state != "playing":
+                        raise Stopped
+                    end = len(self.audio) - len(self.audio) % SAMPLE
+                    chunk = bytes(self.audio[offset:end])
+                    if not chunk:
+                        break  # fetched and all written
+                    if self.playing_since is None:
+                        self.playing_since = (time.monotonic(), offset)
+                if not self.started:
+                    self.started = True
+                    self.event("start")
+                player.stdin.write(chunk)
+                offset += len(chunk)
+            player.stdin.close()
+            player.wait()
+            debug(f"   {self.id}: pw-play {player.pid} exited {player.returncode}")
+            with self.cond:
+                if self.state != "playing":
+                    raise Stopped
+            return player.returncode == 0
+        except BrokenPipeError:  # killed by pause or stop
+            with self.cond:
+                if self.state != "playing":
+                    raise Stopped
+            return False
+        finally:
+            if player.poll() is None:
+                player.kill()
+            try:
+                player.stdin.close()
+            except OSError:  # unwritten data left after a kill
+                pass
+            player.wait()
+
+    def pause(self):
+        with self.cond:
+            if self.state != "playing":
+                return
+            self.state = "paused"
+            if self.playing_since:
+                since, offset = self.playing_since
+                position = offset + int((time.monotonic() - since) * RATE) * SAMPLE
+                self.resume_at = resume_point(self.audio, min(position, len(self.audio)))
+            player = self.player
+            self.cond.notify_all()
+        if player and player.poll() is None:
+            player.kill()
+
+    def resume(self):
+        with self.cond:
+            if self.state != "paused":
+                return
+            self.state = "playing"
+            self.cond.notify_all()
+
+    def stop(self):
+        with self.cond:
+            self.state = "stopped"
+            player, sock = self.player, self.sock
+            self.cond.notify_all()
+        if player and player.poll() is None:
+            player.kill()
+        if sock:
+            try:
+                sock.shutdown(socket.SHUT_RDWR)  # the server abandons the rest
+            except OSError:
+                pass
+
+
+def main():
+    current = None
+    debug("== host started", os.getpid())
+    while (message := receive()) is not None:
+        debug("<-", shorten(message))
+        kind = message.get("type")
+        if kind == "speak":
+            if current:
+                current.stop()
+            current = Utterance(message)
+        elif current and kind in ("stop", "pause", "resume"):
+            getattr(current, kind)()
+    if current:
+        current.stop()
+    debug("== host exiting (Chrome closed the port)")
+
+
+if __name__ == "__main__":
+    main()
