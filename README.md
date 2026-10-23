@@ -42,7 +42,7 @@ Paths and environment used by all parts:
 ## Omarchy
 
 ```bash
-git clone https://github.com/girlpocalypse/sloptts && cd sloptts
+git clone https://github.com/mollymillions2035/sloptts && cd sloptts
 ./omarchy/install.sh                 # server, kokoro-speak, keys
 ./omarchy/install.sh --with-speechd  # additionally: Speech Dispatcher + Chrome Read aloud
 ./omarchy/install.sh --uninstall
