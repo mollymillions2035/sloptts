@@ -62,12 +62,16 @@ DOTTED_RE = re.compile(r"(?<![\w.])\d+(?:\.\d+){2,}(?![\w]|\.\d)")  # 1.2.3, 192
 DECIMAL_RE = re.compile(r"(?<![\w.])(\d+)\.(\d+)(?![\w]|\.\d)")  # 5.5, 0.27, 1,000.50
 DOMAIN_RE = re.compile(r"(?<=[A-Za-z0-9])\.(?=[a-z]{2,}\b)")  # example.com, server.py
 ABBREVIATIONS = {"e.g.": "for example", "i.e.": "that is"}
+# Titles only before a capitalized word, and case-sensitive, so "5 ms." stays as it is
+TITLES = {"Mr": "Mister", "Mrs": "Missus", "Ms": "Miz", "Dr": "Doctor"}
+TITLE_RE = re.compile(rf"\b({'|'.join(TITLES)})\.(?=\s+[A-Z])")
 
 
 def normalize(text: str) -> str:
     """Spell out dots inside numbers, versions and names so they aren't read as sentence ends."""
     for short, long in ABBREVIATIONS.items():
         text = re.sub(rf"(?<!\w){re.escape(short)}", long, text, flags=re.IGNORECASE)
+    text = TITLE_RE.sub(lambda m: TITLES[m[1]], text)
     text = VERSION_RE.sub(lambda m: m.group() + " ", text)
     text = DOTTED_RE.sub(lambda m: " dot ".join(m.group().split(".")), text)
     # Digits after the point are read one by one, as espeak does for "5.25"
