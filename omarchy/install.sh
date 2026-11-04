@@ -36,7 +36,7 @@ BROWSER_DIRS=("$HOME/.config/google-chrome" "$HOME/.config/chromium")
 # on re-run.
 PYTHON_VERSION=3.13
 KOKORO_ONNX_VERSION=0.6.1
-ONNXRUNTIME_VERSION=1.31.0
+ONNXRUNTIME_VERSION=1.31.1
 # model-files-v1.1 re-exports kokoro-v1.0.onnx (same weights) with a duration output,
 # which kokoro-onnx 0.6 uses for timestamps. A file that doesn't match is replaced.
 MODEL_URL=https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.1

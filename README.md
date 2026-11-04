@@ -270,7 +270,8 @@ stdin.
   (`"Opus 5.5."`) came out as `fˈaɪv. fˈaɪv` ("five. five"), and `example.com` gets a
   `.` inside it that kokoro-onnx pauses on. `server.py` spells these out before
   phonemizing. (kokoro-onnx 0.6.1; `"Opus 5.5"` with nothing after it was already
-  fine there.)
+  fine there. phonemizer 3.6 reads `"Opus 5.5."` correctly by itself, but `example.com`
+  still gets the `.`, so the spelling-out stays.)
 - **onnxruntime phones home.** Its pip builds (CPU and GPU, seen in 1.30 and 1.31) include
   Microsoft's 1DS telemetry, which queues events in
   `~/.cache/Microsoft/DeveloperTools/.onnxruntime/` and uploads them to
