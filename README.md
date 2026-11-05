@@ -48,8 +48,8 @@ git clone https://github.com/mollymillions2035/sloptts && cd sloptts
 ./omarchy/install.sh --uninstall
 ```
 
-Then select some text and press **Alt + F9**. Press it again to stop.
-**Super + Alt + F9** reads the clipboard.
+Then select some text and press **Alt + Shift + Space**. Press it again to stop.
+**Super + Alt + Shift + Space** reads the clipboard.
 
 With the mouse only: select text, then click the **Speak** button in the bar (the
 speaking-person icon, left of the volume icon). Right-click it to read the clipboard
@@ -65,7 +65,7 @@ Pages that use `speechSynthesis` get the Kokoro voices too.
 
 ### What the installer does
 
-1. **Checks the keys first.** If Alt+F9 or Super+Alt+F9 is already bound
+1. **Checks the keys first.** If Alt+Shift+Space or Super+Alt+Shift+Space is already bound
    (`hyprctl binds`), it stops and names the binding. Change `KEY_*` at the top of the
    script to pick others, or pass `--no-bindings`.
 2. **Downloads the model** (`kokoro-v1.0.onnx` and `voices-v1.0.bin`, 350 MB) from

@@ -47,11 +47,11 @@ declare -A MODEL_SHA256=(
 MODEL_FILES=(kokoro-v1.0.onnx voices-v1.0.bin)
 
 # Hyprland keys: modmask is SUPER=64 + ALT=8 (+ SHIFT=1), used to look for clashes.
-# Alt+F9 and Super+Alt+F9 sit next to push-to-talk dictation on F9.
+# Alt+Shift+Space and Super+Alt+Shift+Space sit next to dictation on Alt+Space.
 # Not Super+Alt+S: stock Omarchy binds it to "Move window to scratchpad".
-KEY_SELECTION="ALT + F9"
-KEY_CLIPBOARD="SUPER + ALT + F9"
-KEY_CHECKS=("8 F9" "72 F9")
+KEY_SELECTION="ALT + SHIFT + SPACE"
+KEY_CLIPBOARD="SUPER + ALT + SHIFT + SPACE"
+KEY_CHECKS=("9 SPACE" "73 SPACE")
 
 USE_GPU=1
 WITH_SPEECHD=0
