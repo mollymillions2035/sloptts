@@ -12,9 +12,11 @@ here (or the reverse) when asked.
 
 - **Omarchy:** `omarchy/install.sh` installs everything, including the `sloptts.speak`
   bar button (`omarchy/bar-widget/`, live in `~/.config/omarchy/plugins/sloptts.speak/`).
-  The server runs natively (no Docker) from a uv venv in `~/.local/share/kokoro-tts/.venv`: onnxruntime-gpu with the
-  CUDA pip wheels when there's an NVIDIA GPU, else the CPU onnxruntime (`--cpu` forces
-  it). Keys go in a marked block in `~/.config/hypr/bindings.lua`.
+  The server runs natively (no Docker) from a Python 3.12 uv venv in
+  `~/.local/share/kokoro-tts/.venv`: onnxruntime-gpu with the CUDA pip wheels when there's an
+  NVIDIA GPU, else the CPU onnxruntime (`--cpu` forces it). Misaki 0.9.4 requires Python <3.13.
+  `server/misaki_g2p.py` loads en-US eagerly and en-GB lazily (en-UK is an alias), with eSpeak
+  fallback for both. Keys go in a marked block in `~/.config/hypr/bindings.lua`.
 - **Chrome:** the extension (`chrome/extension/`, live in
   `~/.local/share/kokoro-tts/chrome-extension/`) is loaded unpacked by hand; the host
   (`chrome/kokoro-chrome-host`, live next to it) is registered as `sloptts.kokoro` in

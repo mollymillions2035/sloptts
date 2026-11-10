@@ -2,8 +2,9 @@
 Note from the human who told claude to make this: THIS IS PURE SLOP. I HAVE NOT READ THE CODE. UPLOADED FOR REFERENCES PURPOSES ONLY. I HIGHLY RECOMMEND YOU DO NOT ATTEMPT TO USE THIS AS-IS.
 
 Local, high-quality text-to-speech with **Kokoro-82M** (voice `af_heart`) through
-[kokoro-onnx](https://github.com/thewh1teagle/kokoro-onnx). A small server keeps the model
-loaded and streams audio over a Unix socket. Clients send it text:
+[kokoro-onnx](https://github.com/thewh1teagle/kokoro-onnx), with English phonemization by
+[Misaki](https://github.com/hexgrad/misaki). A small server keeps the model loaded and streams
+audio over a Unix socket. Clients send it text:
 
 - **`kokoro-speak`**: speak the highlighted text, the clipboard, an argument or stdin. On
   Omarchy it is bound to a key (press again to stop).
@@ -20,6 +21,7 @@ now has an installer for [Omarchy](https://omarchy.org/) (Arch + Hyprland).
 | Path | What it is |
 |---|---|
 | `server/server.py` | The TTS server. Protocol: one JSON line `{"text","voice","speed"}` in, raw 24 kHz mono float32 PCM out until the server closes the connection. A client disconnecting stops synthesis. Normalizes dots that espeak-ng would read as sentence ends (`5.5.`, `1.2.3`, `example.com`, `e.g.`, `Mr.`), and turns rendered math into words: math letters (`𝜋`, `𝑟`, `ℝ`), powers, fractions, derivatives, limits, integral and sum bounds, absolute values, factorials, primes, accents, and the symbols espeak-ng skips or misreads. |
+| `server/misaki_g2p.py` | English Misaki G2P with eSpeak fallback for unknown words. en-US loads with the server; en-GB loads lazily for the first British voice (`en-UK` is accepted as an alias). |
 | `server/say.py` | Standalone script to compare voices (`say.py VOICE "text" [--speed] [--out f.wav] [--list]`). |
 | `bin/kokoro-speak` | Client for keys, the bar button and scripts. Sends the whole text in one request into one `pw-play`, so there's no start-up gap between sentences. Only one instance speaks at a time. Its PipeWire stream is named `kokoro-speak` ("Kokoro TTS" in mixers). |
 | `chrome/extension/` | Chrome/Chromium extension (Manifest V3) registering six Kokoro voices (Heart, Bella, Michael, Fenrir: en-US; Emma, George: en-GB), named like `Kokoro Heart (not Google)`, as a `ttsEngine`. Its fixed `key` gives it the ID `imfdenmcpjfjjcbkhpbgldooiijflami`. |
@@ -73,8 +75,13 @@ Pages that use `speechSynthesis` get the Kokoro voices too.
    each file's SHA-256. A file that's already there with the right checksum is kept; one
    that doesn't match, such as the older `model-files-v1.0` export of the same model, is
    replaced.
-3. **Sets up the server** in a Python 3.13 venv made by `uv` in
-   `~/.local/share/kokoro-tts/.venv`, natively (no containers):
+3. **Sets up the server** in a Python 3.12 venv made by `uv` in
+   `~/.local/share/kokoro-tts/.venv`, natively (no containers). Python 3.12 is required by the
+   current Misaki release:
+   - **Misaki English G2P** handles both accents, with eSpeak fallback for unknown words. en-US
+     loads at server startup; en-GB loads on the first British voice. The installer preinstalls
+     spaCy's `en_core_web_sm` model, so nothing is downloaded on the first request. The optional
+     transformer/PyTorch dependencies aren't needed by this configuration and aren't installed.
    - **NVIDIA GPU** (`nvidia-smi -L` works): `onnxruntime-gpu[cuda,cudnn]`, which brings
      the CUDA 13 runtime and cuDNN as pip wheels (about 2.5 GB; needs driver 580+). The
      CPU `onnxruntime` that kokoro-onnx depends on is left out (`uv pip install
@@ -112,8 +119,8 @@ Packages come from `omarchy pkg add`: `jq`, `wl-clipboard`, `libnotify`, `uv` an
 `speech-dispatcher` (optional). Re-running the installer is safe; it replaces its own key
 block and unit.
 
-**Versions** (Python, kokoro-onnx, onnxruntime) are set at the top of `install.sh`.
-Re-running the installer after changing them upgrades the venv (and its unpinned
+**Versions** (Python, kokoro-onnx, Misaki, onnxruntime and the spaCy model) are set at the top of
+`install.sh`. Re-running the installer after changing them upgrades the venv (and its unpinned
 dependencies).
 
 ### Checking it
@@ -194,7 +201,7 @@ update both `server.py` and `sd_kokoro` together (or set `KOKORO_SOCKET`).
    mkdir -p ~/kokoro && cd ~/kokoro
    curl -LO https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/kokoro-v1.0.onnx
    curl -LO https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.0/voices-v1.0.bin
-   distrobox enter kokoro -- sh -c 'cd ~/kokoro && uv venv --python /usr/bin/python3.12 .venv && uv pip install --python .venv kokoro-onnx soundfile'
+   distrobox enter kokoro -- sh -c 'cd ~/kokoro && uv venv --python /usr/bin/python3.12 .venv && uv pip install --python .venv kokoro-onnx soundfile misaki==0.9.4 num2words spacy phonemizer-fork espeakng-loader https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl'
    cp server/*.py ~/kokoro/
    ```
 2. **Service:** copy `fedora/systemd/kokoro-tts.service` to `~/.config/systemd/user/`, then
@@ -265,13 +272,12 @@ stdin.
   type, the **last** `AddVoice` line wins.
 - **Speech Dispatcher 0.12 user module dir** is `~/.local/libexec/speech-dispatcher-modules`
   (computed as `$XDG_DATA_HOME/../libexec/...`), which works on read-only `/usr`.
-- **Dots inside tokens can become sentence ends.** kokoro-onnx phonemizes with
-  espeak-ng while keeping punctuation. A decimal followed by more punctuation
-  (`"Opus 5.5."`) came out as `fˈaɪv. fˈaɪv` ("five. five"), and `example.com` gets a
-  `.` inside it that kokoro-onnx pauses on. `server.py` spells these out before
-  phonemizing. (kokoro-onnx 0.6.1; `"Opus 5.5"` with nothing after it was already
-  fine there. phonemizer 3.6 reads `"Opus 5.5."` correctly by itself, but `example.com`
-  still gets the `.`, so the spelling-out stays.)
+- **Dots inside tokens can become sentence ends.** The old kokoro-onnx/espeak-ng phonemization
+  path kept punctuation. A decimal followed by more punctuation (`"Opus 5.5."`) came out as
+  `fˈaɪv. fˈaɪv` ("five. five"), and `example.com` got a `.` inside it that kokoro-onnx paused
+  on. `server.py` still spells these out before Misaki phonemizes the text. (kokoro-onnx 0.6.1;
+  `"Opus 5.5"` with nothing after it was already fine there. phonemizer 3.6 reads `"Opus 5.5."`
+  correctly by itself, but `example.com` still gets the `.`, so the spelling-out stays.)
 - **onnxruntime phones home.** Its pip builds (CPU and GPU, seen in 1.30 and 1.31) include
   Microsoft's 1DS telemetry, which queues events in
   `~/.cache/Microsoft/DeveloperTools/.onnxruntime/` and uploads them to

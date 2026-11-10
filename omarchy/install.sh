@@ -32,11 +32,12 @@ EXTENSION_ID=imfdenmcpjfjjcbkhpbgldooiijflami
 NATIVE_HOST=sloptts.kokoro
 BROWSER_DIRS=("$HOME/.config/google-chrome" "$HOME/.config/chromium")
 
-# Python is capped by kokoro-onnx (<3.14). Changing a version here upgrades the venv
-# on re-run.
-PYTHON_VERSION=3.13
+# Misaki 0.9.4 requires Python <3.13. Changing a version here upgrades the venv on re-run.
+PYTHON_VERSION=3.12
 KOKORO_ONNX_VERSION=0.6.1
+MISAKI_VERSION=0.9.4
 ONNXRUNTIME_VERSION=1.31.1
+SPACY_MODEL_URL=https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.8.0/en_core_web_sm-3.8.0-py3-none-any.whl
 # model-files-v1.1 re-exports kokoro-v1.0.onnx (same weights) with a duration output,
 # which kokoro-onnx 0.6 uses for timestamps. A file that doesn't match is replaced.
 MODEL_URL=https://github.com/thewh1teagle/kokoro-onnx/releases/download/model-files-v1.1
@@ -113,7 +114,7 @@ download_models() {
 
 has_nvidia_gpu() { have nvidia-smi && nvidia-smi -L >/dev/null 2>&1; }
 
-# Python version and onnxruntime build in the venv, e.g. "3.13 gpu"
+# Python version and onnxruntime build in the venv, e.g. "3.12 gpu"
 venv_state() {
   "$DATA/.venv/bin/python" -I -c '
 import sys, importlib.metadata as m
@@ -143,15 +144,22 @@ setup_venv() {  # $1: cpu or gpu
     say "Creating the Python $PYTHON_VERSION venv ($1) in $DATA/.venv"
     uv venv --clear --python "$PYTHON_VERSION" "$DATA/.venv"
   fi
-  # --upgrade also moves the unpinned dependencies (numpy, phonemizer) to current releases
+  # Misaki's non-transformer pipeline needs neither PyTorch nor spacy-curated-transformers.
+  # Preinstall its spaCy model so the server never downloads it on a request.
+  local packages=(
+    "kokoro-onnx==$KOKORO_ONNX_VERSION"
+    "misaki==$MISAKI_VERSION"
+    num2words spacy phonemizer-fork espeakng-loader "$SPACY_MODEL_URL"
+  )
+  # --upgrade also moves the unpinned dependencies (numpy, phonemizer, spaCy) to current releases
   if [[ $1 == gpu ]]; then
     # kokoro-onnx depends on the CPU onnxruntime: leave it out. The [cuda,cudnn] extras
     # bring the CUDA 13 runtime as pip wheels (about 2.5 GB; needs NVIDIA driver 580+).
     uv pip install --upgrade --python "$py" --excludes <(echo onnxruntime) \
-      "kokoro-onnx==$KOKORO_ONNX_VERSION" "onnxruntime-gpu[cuda,cudnn]==$ONNXRUNTIME_VERSION"
+      "${packages[@]}" "onnxruntime-gpu[cuda,cudnn]==$ONNXRUNTIME_VERSION"
   else
     uv pip install --upgrade --python "$py" \
-      "kokoro-onnx==$KOKORO_ONNX_VERSION" "onnxruntime==$ONNXRUNTIME_VERSION"
+      "${packages[@]}" "onnxruntime==$ONNXRUNTIME_VERSION"
   fi
 }
 
@@ -168,7 +176,7 @@ install_server() {
   else
     setup_venv cpu
   fi
-  install -m644 "$REPO/server/server.py" "$DATA/server.py"
+  install -m644 -t "$DATA" "$REPO/server/server.py" "$REPO/server/misaki_g2p.py"
   install -Dm644 "$REPO/omarchy/kokoro-tts.service" "$UNIT_DIR/kokoro-tts.service"
   systemctl --user daemon-reload
   systemctl --user enable kokoro-tts.service

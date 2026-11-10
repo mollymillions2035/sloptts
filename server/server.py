@@ -47,16 +47,16 @@ if "CUDAExecutionProvider" in onnxruntime.get_available_providers():
         log.warning("preload_dlls failed: %s", error)
 
 from kokoro_onnx import Kokoro  # noqa: E402  (after the CUDA preload)
+from misaki_g2p import phonemize  # noqa: E402
 
 kokoro = Kokoro(str(MODEL_DIR / "kokoro-v1.0.onnx"), str(MODEL_DIR / "voices-v1.0.bin"))
 voices = set(kokoro.get_voices())
 # The first run on CUDA sets up kernels and memory (~0.6 s); pay that now, not on the first request
-kokoro.create("Ready.", voice=DEFAULT_VOICE)
+kokoro.create(phonemize("Ready."), voice=DEFAULT_VOICE, is_phonemes=True)
 
-# espeak-ng (through phonemizer, which keeps punctuation) treats a "." inside a
-# token as a sentence end when more punctuation follows: "Opus 5.5." comes out
-# as "five. five", and kokoro-onnx then pauses at that ".". Spelling these out
-# keeps the dot from reaching the phonemizer.
+# The old kokoro-onnx/espeak-ng path treated a "." inside a token as a sentence end
+# when more punctuation followed: "Opus 5.5." came out as "five. five", and
+# kokoro-onnx then paused at that ".". Keep spelling these out before Misaki sees them.
 VERSION_RE = re.compile(r"\b[vV](?=\d+(?:\.\d+)+\b)")  # v2.0 -> v 2.0
 DOTTED_RE = re.compile(r"(?<![\w.])\d+(?:\.\d+){2,}(?![\w]|\.\d)")  # 1.2.3, 192.168.0.1
 DECIMAL_RE = re.compile(r"(?<![\w.])(\d+)\.(\d+)(?![\w]|\.\d)")  # 5.5, 0.27, 1,000.50
@@ -239,7 +239,10 @@ async def handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> 
         log.info("speak voice=%s speed=%.2f chars=%d", voice, speed, len(text))
         if LOG_TEXT:
             log.info("text: %r", text)
-        async for samples, _rate in kokoro.create_stream(text, voice=voice, speed=speed, lang=lang):
+        phonemes = phonemize(text, lang)
+        async for samples, _rate in kokoro.create_stream(
+            phonemes, voice=voice, speed=speed, is_phonemes=True
+        ):
             writer.write(samples.astype("float32").tobytes())
             await writer.drain()
     except (ConnectionResetError, BrokenPipeError):

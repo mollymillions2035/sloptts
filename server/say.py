@@ -9,6 +9,7 @@ os.environ.setdefault("ORT_DISABLE_TELEMETRY", "1")  # see server.py; before onn
 
 import soundfile as sf  # noqa: E402
 from kokoro_onnx import Kokoro  # noqa: E402
+from misaki_g2p import phonemize  # noqa: E402
 
 HERE = Path(__file__).parent
 
@@ -27,7 +28,9 @@ if args.list:
     raise SystemExit
 
 lang = "en-gb" if args.voice.startswith("b") else "en-us"
-samples, rate = kokoro.create(args.text, voice=args.voice, speed=args.speed, lang=lang)
+samples, rate = kokoro.create(
+    phonemize(args.text, lang), voice=args.voice, speed=args.speed, is_phonemes=True
+)
 
 if args.out:
     sf.write(args.out, samples, rate)
