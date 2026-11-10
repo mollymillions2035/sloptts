@@ -8,6 +8,7 @@ Environment:
     KOKORO_SOCKET     socket path (default $XDG_RUNTIME_DIR/kokoro-tts/kokoro-tts.sock)
     KOKORO_MODEL_DIR  directory with kokoro-v1.0.onnx and voices-v1.0.bin (default: next to this file)
     KOKORO_LOG_TEXT   set to 1 to log the text of each request (off: the journal would keep everything spoken)
+    KOKORO_PARAGRAPH_PAUSE  seconds of silence between paragraphs (default 0.4, about 0.55 s in all; a sentence gets ~0.3)
     ONNX_PROVIDER     onnxruntime execution provider (default: CUDAExecutionProvider when
                       onnxruntime-gpu can use it, otherwise the CPU)
     ORT_DISABLE_TELEMETRY  set to 1 here; set it to 0 to let onnxruntime send usage data
@@ -31,6 +32,8 @@ RUNTIME_DIR = Path(os.environ.get("XDG_RUNTIME_DIR", "/tmp"))
 SOCKET = Path(os.environ.get("KOKORO_SOCKET") or RUNTIME_DIR / "kokoro-tts" / "kokoro-tts.sock")
 MODEL_DIR = Path(os.environ.get("KOKORO_MODEL_DIR") or Path(__file__).parent)
 LOG_TEXT = os.environ.get("KOKORO_LOG_TEXT") == "1"
+PARAGRAPH_PAUSE = min(max(float(os.environ.get("KOKORO_PARAGRAPH_PAUSE") or 0.4), 0.0), 5.0)
+SAMPLE_RATE = 24000
 DEFAULT_VOICE = "af_heart"
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")
@@ -215,36 +218,81 @@ def accent(letter: str, mark: str) -> str:
 
 
 SSML_RE = re.compile(r"</?(?:speak|mark|s|p|voice|prosody|break|say-as|emphasis|sub|audio|phoneme|lang)\b[^<>]*>")
+# Characters that aren't whitespace to str.split() but leave a line looking blank
+INVISIBLE_RE = re.compile("[​‌‍⁠﻿­᠎]")
+LIST_ITEM_RE = re.compile(r"(?:[-*+•‣◦▪▸►]|\d{1,3}[.)])\s")  # "- item", "• item", "1. item", "2) item"
+PAUSES = tuple(".!?…:;,")
+CLOSERS = "\"')]}”’»*_`"  # a stop inside quotes, brackets or Markdown emphasis still counts
 
 
-def clean(text: str) -> str:
-    """Strip SSML markup Speech Dispatcher may pass through, collapse whitespace, normalize."""
+def ends_pause(line: str) -> bool:
+    return INVISIBLE_RE.sub("", line).rstrip().rstrip(CLOSERS).endswith(PAUSES)
+
+
+def paragraphs(text: str) -> list[str]:
+    """Split at blank lines, so the server can leave a longer gap there than after a sentence.
+    Kokoro pauses only at punctuation, and collapsing whitespace would run a heading or a
+    bullet with no full stop into the next line, so end each paragraph, and the line before
+    a list item, with a full stop. Other line breaks stay spaces: hard-wrapped text (PDFs,
+    mail, man pages) breaks lines mid-sentence."""
+    out, lines = [], []
+    for line in text.splitlines():
+        if not INVISIBLE_RE.sub("", line).strip():  # blank, give or take invisible characters
+            if lines:
+                out.append(lines)
+                lines = []
+            continue
+        if lines and LIST_ITEM_RE.match(INVISIBLE_RE.sub("", line).strip()) and not ends_pause(lines[-1]):
+            lines[-1] = lines[-1].rstrip() + "."
+        lines.append(line)
+    if lines:
+        out.append(lines)
+    for lines in out[:-1]:  # the falling tone of a sentence end, before the gap
+        if not ends_pause(lines[-1]):
+            lines[-1] = lines[-1].rstrip() + "."
+    return ["\n".join(lines) for lines in out]
+
+
+def clean(text: str) -> list[str]:
+    """Strip SSML markup Speech Dispatcher may pass through, split into paragraphs,
+    collapse whitespace, normalize."""
     text = SSML_RE.sub(" ", text)
     text = text.replace("&lt;", "<").replace("&gt;", ">").replace("&quot;", '"')
     text = text.replace("&apos;", "'").replace("&amp;", "&")
-    return normalize(" ".join(plain_symbols(text).split()))
+    cleaned = (normalize(" ".join(plain_symbols(p).split())) for p in paragraphs(text))
+    return [p for p in cleaned if p]
 
 
 async def handle(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
     try:
         request = json.loads(await reader.readline())
-        text = clean(request.get("text", ""))
+        texts = clean(request.get("text", ""))
         voice = request.get("voice") or DEFAULT_VOICE
         if voice not in voices:
             voice = DEFAULT_VOICE
         speed = min(max(float(request.get("speed", 1.0)), 0.5), 2.0)
         lang = "en-gb" if voice.startswith("b") else "en-us"
-        if not text:
+        if not texts:
             return
-        log.info("speak voice=%s speed=%.2f chars=%d", voice, speed, len(text))
+        log.info("speak voice=%s speed=%.2f chars=%d paragraphs=%d",
+                 voice, speed, sum(map(len, texts)), len(texts))
         if LOG_TEXT:
-            log.info("text: %r", text)
-        phonemes = phonemize(text, lang)
-        async for samples, _rate in kokoro.create_stream(
-            phonemes, voice=voice, speed=speed, is_phonemes=True
-        ):
-            writer.write(samples.astype("float32").tobytes())
-            await writer.drain()
+            log.info("text: %r", texts)
+        # kokoro-onnx trims the silence at the end of each stream, so this is the whole gap
+        silence = bytes(4 * int(PARAGRAPH_PAUSE * SAMPLE_RATE))
+        spoken = False
+        for text in texts:
+            phonemes = phonemize(text, lang)
+            if not phonemes.strip():
+                continue
+            if spoken and silence:
+                writer.write(silence)
+            async for samples, _rate in kokoro.create_stream(
+                phonemes, voice=voice, speed=speed, is_phonemes=True
+            ):
+                writer.write(samples.astype("float32").tobytes())
+                await writer.drain()
+            spoken = True
     except (ConnectionResetError, BrokenPipeError):
         log.info("client disconnected, speech stopped")
     except Exception:

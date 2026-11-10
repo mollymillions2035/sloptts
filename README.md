@@ -40,6 +40,7 @@ Paths and environment used by all parts:
 | Socket | `$XDG_RUNTIME_DIR/kokoro-tts/kokoro-tts.sock` | `KOKORO_SOCKET` |
 | Model files | next to `server.py` | `KOKORO_MODEL_DIR` |
 | Log the spoken text | off | `KOKORO_LOG_TEXT=1` (in `~/.config/kokoro-tts/env` on Omarchy) |
+| Extra silence between paragraphs (blank lines) | 0.4 s (~0.55 s gap; sentences ~0.3 s) | `KOKORO_PARAGRAPH_PAUSE=0.6` (same file) |
 
 ## Omarchy
 
